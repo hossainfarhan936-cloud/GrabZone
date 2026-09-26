@@ -10,3 +10,15 @@ export async function sendVendorOrderEmail(env,{to,vendorName,orderNumber,items,
     return {ok:true};
   }catch(err){console.error("Resend vendor order email error",err);return {ok:false};}
 }
+
+export async function sendCustomerOrderConfirmation(env,{to,customerName,orderNumber,items,subtotal,shipping,total,tracking}){
+  if(!env.RESEND_API_KEY||!to)return {skipped:true};
+  const rows=(items||[]).map(x=>`<tr><td style="padding:10px;border-bottom:1px solid #eee">${esc(x.product_name||"Product")}</td><td style="padding:10px;text-align:center;border-bottom:1px solid #eee">${Math.max(1,Number(x.quantity||1))}</td><td style="padding:10px;text-align:right;border-bottom:1px solid #eee">${money(x.line_total??Number(x.unit_price||0)*Number(x.quantity||1))}</td></tr>`).join("");
+  const trackingUrl="https://grabzone.tech/track-order.html?tracking="+encodeURIComponent(tracking||"");
+  const html=`<!doctype html><html><body style="margin:0;background:#f6f7f9;font-family:Arial,sans-serif;color:#171717"><div style="max-width:620px;margin:24px auto;background:#fff;border-radius:16px;overflow:hidden"><div style="padding:26px;background:#111;color:#fff"><div style="font-size:12px;letter-spacing:2px;color:#ffb36b;font-weight:bold">GRABZONE · ORDER CONFIRMATION</div><h1 style="margin:12px 0 4px;font-size:25px">Thanks for your order!</h1><div style="color:#ddd">Hi ${esc(customerName||"there")}, we've received your order.</div></div><div style="padding:24px"><p><strong>Order number:</strong> ${esc(orderNumber||"")}</p><table style="width:100%;border-collapse:collapse"><thead><tr><th align="left" style="padding:10px;border-bottom:2px solid #ddd">Item</th><th style="padding:10px;border-bottom:2px solid #ddd">Qty</th><th align="right" style="padding:10px;border-bottom:2px solid #ddd">Amount</th></tr></thead><tbody>${rows}</tbody></table><div style="margin-top:18px;text-align:right;line-height:1.9"><div>Subtotal: ${money(subtotal)}</div><div>Delivery: ${money(shipping)}</div><div style="font-size:19px;font-weight:bold">Total: ${money(total)}</div></div><p style="margin:26px 0"><a href="${trackingUrl}" style="display:inline-block;background:#ff6b00;color:#fff;text-decoration:none;padding:13px 20px;border-radius:9px;font-weight:bold">Track your order</a></p><p style="color:#666;font-size:13px">Payment method: Cash on Delivery. We'll contact you to confirm your order.</p></div></div></body></html>`;
+  try{
+    const res=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({from:"GrabZone Orders <orders@grabzone.tech>",to:[String(to).trim()],subject:`GrabZone order received — ${orderNumber||""}`.trim(),html})});
+    if(!res.ok){console.error("Resend customer order email failed",res.status,(await res.text()).slice(0,400));return {ok:false,status:res.status};}
+    return {ok:true};
+  }catch(err){console.error("Resend customer order email error",err);return {ok:false};}
+}
