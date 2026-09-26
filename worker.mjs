@@ -1,4 +1,5 @@
 /* GrabZone Cloudflare Worker backend: static assets + D1 + R2 + admin auth. */
+import { sendVendorOrderEmail } from './grabzone-email.mjs';
 const TABLES=new Set(["products","product_images","orders","order_items","billboards","billboard_settings","notices","referral_codes","site_settings","store_policies","customer_points","grabpoints_ledger","vendors","vendor_orders","vendor_order_items","shipments"]);
 const PUBLIC_TABLES=new Set(["products","product_images","notices","site_settings","billboards","billboard_settings","store_policies"]);
 const BOOLS=new Set(["drop_enabled","published","active","is_main","autoplay","show_arrows","show_dots","enabled","animation_enabled","show_notice","show_offer","show_how","show_referral","animations_enabled","page_load","scroll_reveal","product_hover","button_effects","hero_animation","floating_effects","notice_animation","magnetic_cursor","text_reveal","image_parallax","scroll_velocity","product_stagger","marquee_motion","header_scroll","premium_hover_glow","section_transitions","product_entrance","product_3d_tilt","product_image_zoom","product_image_parallax","product_cursor_spotlight","product_shine","product_hover_lift","product_featured_glow","billboard_animation","rewards_auth_animation","rewards_redeem_animation","rewards_redeem_sound","mobile_nav_animation","store_page_animation","cart_animation","modal_animation","micro_interactions","global_transitions"]);
@@ -228,13 +229,14 @@ async function routeOrderToVendors(env,orderId,items){
   await ensureVendorOrderTables(env);
   const groups=new Map();
   for(const item of items){
-    const p=await q(env,"SELECT p.vendor_id,COALESCE(v.brand_name,v.business_name,v.slug,'GrabZone Vendor') vendor_name,COALESCE(v.shipping_fee,130) shipping_fee,COALESCE(v.commission_type,'percentage') commission_type,COALESCE(v.commission_value,0) commission_value FROM products p LEFT JOIN vendors v ON v.id=p.vendor_id WHERE p.id=? LIMIT 1",[item.product_id]);
+    const p=await q(env,"SELECT p.vendor_id,COALESCE(v.brand_name,v.business_name,v.slug,'GrabZone Vendor') vendor_name,v.email vendor_email,COALESCE(v.shipping_fee,130) shipping_fee,COALESCE(v.commission_type,'percentage') commission_type,COALESCE(v.commission_value,0) commission_value FROM products p LEFT JOIN vendors v ON v.id=p.vendor_id WHERE p.id=? LIMIT 1",[item.product_id]);
     const row=p.results?.[0];
     if(!row?.vendor_id)continue;
     const vid=String(row.vendor_id);
-    if(!groups.has(vid))groups.set(vid,{vendor_id:vid,vendor_name:row.vendor_name,shipping_fee:Number(row.shipping_fee??130),commission_type:String(row.commission_type||'percentage'),commission_value:Number(row.commission_value||0),items:[]});
+    if(!groups.has(vid))groups.set(vid,{vendor_id:vid,vendor_name:row.vendor_name,vendor_email:row.vendor_email||"",shipping_fee:Number(row.shipping_fee??130),commission_type:String(row.commission_type||'percentage'),commission_value:Number(row.commission_value||0),items:[]});
     groups.get(vid).items.push(item);
   }
+  const orderNumber=(await q(env,"SELECT order_number FROM orders WHERE id=? LIMIT 1",[orderId])).results?.[0]?.order_number||orderId;
   const voCols=new Set(((await q(env,"PRAGMA table_info(vendor_orders)")).results||[]).map(x=>x.name));
   const viCols=new Set(((await q(env,"PRAGMA table_info(vendor_order_items)")).results||[]).map(x=>x.name));
   for(const g of groups.values()){
@@ -253,6 +255,7 @@ async function routeOrderToVendors(env,orderId,items){
       if(!fields2.includes("id")||!fields2.includes("vendor_order_id")||!fields2.includes("order_item_id"))continue;
       await env.DB.prepare("INSERT INTO vendor_order_items("+fields2.join(",")+") VALUES("+fields2.map(()=>"?").join(",")+")").bind(...fields2.map(k=>vi[k])).run();
     }
+    await sendVendorOrderEmail(env,{to:g.vendor_email,vendorName:g.vendor_name,orderNumber,items:g.items,subtotal});
   }
 }
 async function rpc(env,fn,a,isAdmin){if(fn==="get_public_tracking_id"){const r=await q(env,"SELECT public_tracking_id FROM orders WHERE id=? LIMIT 1",[String(a.p_order_id||"")]);return{data:r.results?.[0]?.public_tracking_id||null}}if(fn==="validate_referral_code"){const code=String(a.p_code||"").trim().toUpperCase(),sub=Math.max(0,Number(a.p_subtotal||0));if(!code)return{data:{valid:false,discount:0,message:""}};const r=(await q(env,"SELECT * FROM referral_codes WHERE upper(code)=upper(?) AND active=1 LIMIT 1",[code])).results?.[0];if(!r)return{data:{valid:false,discount:0,message:"Invalid or inactive referral code."}};if(r.starts_at&&new Date(r.starts_at)>new Date())return{data:{valid:false,discount:0,message:"This referral code is not active yet."}};if(r.expires_at&&new Date(r.expires_at)<new Date())return{data:{valid:false,discount:0,message:"This referral code has expired."}};if(r.usage_limit!==null&&Number(r.used_count||0)>=Number(r.usage_limit))return{data:{valid:false,discount:0,message:"This referral code has reached its usage limit."}};if(sub<Number(r.min_order_amount||0))return{data:{valid:false,discount:0,message:"Minimum order amount for this code is ৳"+Number(r.min_order_amount||0).toLocaleString("en-BD")+"."}};let d=r.benefit_type==="percentage"?Math.round(sub*Number(r.benefit_value||0)/100*100)/100:Number(r.benefit_value||0);if(r.max_discount_amount!==null)d=Math.min(d,Number(r.max_discount_amount));d=Math.max(0,Math.min(d,sub));return{data:{valid:true,discount:d,code:String(r.code).toUpperCase(),label:r.benefit_type==="percentage"?r.benefit_value+"% off":"৳"+r.benefit_value+" off",admin_name:r.admin_name}}}
