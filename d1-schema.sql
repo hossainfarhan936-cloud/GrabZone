@@ -60,3 +60,9 @@ INSERT OR IGNORE INTO vendors (id,name,slug,description,category,status,show_on_
 INSERT OR IGNORE INTO vendor_shipping_settings(vendor_id,shipping_fee,enabled,updated_at) VALUES('vendor_grabzone',0,1,datetime('now'));
 INSERT OR IGNORE INTO vendor_store_settings(vendor_id,featured_product_ids,sections,social_links,updated_at) VALUES('vendor_grabzone','[]','[]','{}',datetime('now'));
 INSERT OR IGNORE INTO vendor_email_settings(vendor_id,customer_email_notifications,vendor_email_notifications,updated_at) VALUES('vendor_grabzone',1,1,datetime('now'));
+-- Vendor new-order notification log: one row per order+vendor pair, used as the
+-- send lock so a vendor is never emailed twice for the same order. See
+-- migrations/2026-09-27-vendor-order-notifications.sql for the standalone migration.
+CREATE TABLE IF NOT EXISTS vendor_order_notifications (notification_key TEXT PRIMARY KEY,order_id TEXT NOT NULL,vendor_id TEXT NOT NULL,vendor_order_id TEXT,recipient TEXT,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,provider TEXT,provider_status INTEGER,provider_message_id TEXT,error TEXT,claim_token TEXT,claimed_at TEXT,sent_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_vendor_order_notifications_order ON vendor_order_notifications(order_id,vendor_id);
+CREATE INDEX IF NOT EXISTS idx_vendor_order_notifications_state ON vendor_order_notifications(status,claimed_at);

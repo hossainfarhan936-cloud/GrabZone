@@ -37,8 +37,23 @@ export function formatDhakaTime(value){
   }catch{return String(value)}
 }
 
+/** Human wording for the real order status; never claims more than the database says. */
+export function statusLabel(status){
+  const s=String(status||"").trim();
+  const lower=s.toLowerCase();
+  if(!s)return "New";
+  if(lower==="new")return "New — placed, waiting for GrabZone confirmation";
+  if(lower==="confirmed")return "Confirmed";
+  if(lower==="contacting")return "Confirmed — we are contacting the customer";
+  if(lower==="processing")return "Processing";
+  if(lower==="shipped")return "Shipped";
+  if(lower==="delivered")return "Delivered";
+  if(lower==="cancelled"||lower==="canceled")return "Cancelled";
+  return s;
+}
+
 /** The branded, mobile-friendly "new order" message for one vendor. */
-export function buildVendorOrderEmail({vendorName,orderNumber,placedAt,items,subtotal,shipping,total,panelUrl,customerName}){
+export function buildVendorOrderEmail({vendorName,orderNumber,placedAt,orderStatus,items,subtotal,shipping,total,panelUrl,customerName}){
   const rows=(items||[]).map(x=>{
     const name=esc(x.product_name||x.name||"Product");
     const variant=esc(variationText(x));
@@ -62,9 +77,10 @@ export function buildVendorOrderEmail({vendorName,orderNumber,placedAt,items,sub
    +`<p style="margin:0 0 16px;font-size:15px;line-height:1.6">A customer order has been placed for your store and is now waiting in your vendor panel. Please review and process it.</p>`
    +`<table style="width:100%;border-collapse:collapse;background:#fafafa;border-radius:12px;margin:0 0 18px"><tbody>`
    +`<tr><td style="padding:11px 14px;color:#666;font-size:13px">Order ID</td><td style="padding:11px 14px;text-align:right;font-weight:bold">${esc(orderNumber||"")}</td></tr>`
-   +`<tr><td style="padding:11px 14px;color:#666;font-size:13px;border-top:1px solid #eee">Confirmed</td><td style="padding:11px 14px;text-align:right;border-top:1px solid #eee">${esc(formatDhakaTime(placedAt))}</td></tr>`
+   +`<tr><td style="padding:11px 14px;color:#666;font-size:13px;border-top:1px solid #eee">Placed</td><td style="padding:11px 14px;text-align:right;border-top:1px solid #eee">${esc(formatDhakaTime(placedAt))}</td></tr>`
+   +`<tr><td style="padding:11px 14px;color:#666;font-size:13px;border-top:1px solid #eee">Order status</td><td style="padding:11px 14px;text-align:right;border-top:1px solid #eee">${esc(statusLabel(orderStatus))}</td></tr>`
    +`<tr><td style="padding:11px 14px;color:#666;font-size:13px;border-top:1px solid #eee">Payment</td><td style="padding:11px 14px;text-align:right;border-top:1px solid #eee">Cash on Delivery</td></tr>`
-   +`<tr><td style="padding:11px 14px;color:#666;font-size:13px;border-top:1px solid #eee">Status</td><td style="padding:11px 14px;text-align:right;border-top:1px solid #eee">Processing — waiting for you</td></tr>`
+   +`<tr><td style="padding:11px 14px;color:#666;font-size:13px;border-top:1px solid #eee">Your action</td><td style="padding:11px 14px;text-align:right;border-top:1px solid #eee">Process this order in your panel</td></tr>`
    +`</tbody></table>`
    +`<h2 style="margin:0 0 8px;font-size:15px;color:#111">Your items in this order</h2>`
    +`<table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr>`
@@ -81,8 +97,8 @@ export function buildVendorOrderEmail({vendorName,orderNumber,placedAt,items,sub
    +`<p style="margin:0;font-size:12px;color:#888;line-height:1.7">This notification is for the vendor account that owns the items above and contains only your part of the order. Payment is Cash on Delivery — settlement follows the GrabZone vendor terms. If the button does not work, copy this address into your browser: <span style="color:#555">${esc(link)}</span></p>`
    +`</div></div></body></html>`;
   const text=["GrabZone — New Order Received","",`Vendor: ${vendorName||""}`,`Order ID: ${orderNumber||""}`]
-    .concat(placedAt?[`Confirmed: ${formatDhakaTime(placedAt)}`]:[])
-    .concat(["Payment: Cash on Delivery","Status: Processing — waiting for you","","Items:"])
+    .concat(placedAt?[`Placed: ${formatDhakaTime(placedAt)}`]:[])
+    .concat([`Order status: ${statusLabel(orderStatus)}`,"Payment: Cash on Delivery","Your action: process this order in your panel","","Items:"])
     .concat((items||[]).map(x=>{const v=variationText(x);return `- ${x.product_name||x.name||"Product"}${v?` (${v})`:""} × ${Math.max(1,Number(x.quantity||1))} — ${money(x.line_total??Number(x.unit_price||0)*Number(x.quantity||1))}`}))
     .concat(["",`Subtotal: ${money(subtotal)}`,`Delivery charge: ${money(shipping)}`,`Total for your store: ${money(total)}`,"",`Open your vendor panel: ${link}`,"","Please process this order from your vendor panel.","This notification contains only your part of the order."])
     .join("\n");
@@ -104,42 +120,73 @@ async function sendViaGmail(env,{to,subject,html,text}){
   try{
     const tokenRes=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:String(env.GOOGLE_CLIENT_ID),client_secret:String(env.GOOGLE_CLIENT_SECRET),refresh_token:String(env.GOOGLE_REFRESH_TOKEN),grant_type:"refresh_token"})});
     const token=await tokenRes.json().catch(()=>({}));
-    if(!tokenRes.ok||!token.access_token)return {ok:false,provider:"gmail",status:tokenRes.status,error:"Gmail token request failed"};
+    if(!tokenRes.ok||!token.access_token)return {ok:false,provider:"gmail",status:tokenRes.status,error:"Gmail token request failed",definitive:true};
     const boundary="gzb_"+Math.random().toString(36).slice(2);
     const raw=["From: GrabZone Vendors <"+String(env.GMAIL_FROM_EMAIL||"grabzonesupport@gmail.com")+">","To: "+to,"Subject: "+subject,"MIME-Version: 1.0",`Content-Type: multipart/alternative; boundary="${boundary}"`,"","--"+boundary,"Content-Type: text/plain; charset=UTF-8","",text,"","--"+boundary,"Content-Type: text/html; charset=UTF-8","",html,"","--"+boundary+"--",""].join("\r\n");
     const res=await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",{method:"POST",headers:{Authorization:"Bearer "+token.access_token,"Content-Type":"application/json"},body:JSON.stringify({raw:b64url(raw)})});
-    if(!res.ok){const detail=(await res.text()).slice(0,400);return {ok:false,provider:"gmail",status:res.status,error:detail}}
+    if(!res.ok){const detail=(await res.text()).slice(0,400);return {ok:false,provider:"gmail",status:res.status,error:detail,definitive:true}}
     const data=await res.json().catch(()=>({}));
     return {ok:true,provider:"gmail",status:res.status,id:data.id||null};
   }catch(err){
-    return {ok:false,provider:"gmail",error:String(err?.message||err)};
+    return {ok:false,provider:"gmail",error:String(err?.message||err),definitive:false};
   }
+}
+
+/** True when the project's Gmail API credentials are all present. */
+export function gmailConfigured(env){
+  return !!(env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET&&env.GOOGLE_REFRESH_TOKEN);
 }
 
 /**
  * New-order notification for one vendor.
- * payload: {to,vendorName,orderNumber,placedAt,items,subtotal,shipping,total,panelUrl,customerName}
- * result : {ok:true,provider} | {skipped:"..."} | {ok:false,provider,status,error}
+ *
+ * Provider chain: Resend first when configured, then the Gmail API when the
+ * Google credentials are configured and Resend answered with a failure.
+ * A network-level failure (timeout, connection reset) is treated as ambiguous
+ * and does NOT fall through to the second provider, because the first provider
+ * may already have accepted the message — that would be a duplicate. Ambiguous
+ * failures are logged as failed and left for the retry path.
+ *
+ * payload: {to,vendorName,orderNumber,placedAt,orderStatus,items,subtotal,shipping,total,panelUrl,customerName}
+ * result : {ok:true,provider,status,id,attempts} | {skipped:"..."} | {ok:false,provider,status,error,definitive,attempts}
  */
 export async function sendVendorOrderEmail(env,payload={}){
   const to=String(payload.to||"").trim();
   if(!to||!to.includes("@"))return {skipped:"no-recipient"};
   const {subject,html,text}=buildVendorOrderEmail(payload);
+  const attempts=[];
+
   if(env.RESEND_API_KEY){
+    let resend;
     try{
       const res=await fetch("https://api.resend.com/emails",{method:"POST",headers:{"Authorization":"Bearer "+env.RESEND_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({from:"GrabZone Vendors <vendors@grabzone.tech>",to:[to],subject,html,text})});
-      if(res.ok){const data=await res.json().catch(()=>({}));return {ok:true,provider:"resend",status:res.status,id:data.id||null}}
+      if(res.ok){
+        const data=await res.json().catch(()=>({}));
+        return {ok:true,provider:"resend",status:res.status,id:data.id||null,attempts:[{provider:"resend",status:res.status,outcome:"accepted"}]};
+      }
       const detail=(await res.text()).slice(0,400);
-      console.error("Resend vendor order email failed",res.status,detail);
-      return {ok:false,provider:"resend",status:res.status,error:detail};
+      console.error("Resend vendor order email rejected",res.status,detail);
+      resend={ok:false,provider:"resend",status:res.status,error:detail,definitive:true};
     }catch(err){
-      console.error("Resend vendor order email error",err);
-      return {ok:false,provider:"resend",error:String(err?.message||err)};
+      console.error("Resend vendor order email network error",err);
+      resend={ok:false,provider:"resend",error:String(err?.message||err),definitive:false};
     }
+    attempts.push({provider:"resend",status:resend.status??null,outcome:resend.definitive?"rejected":"ambiguous"});
+    if(!resend.definitive)return {...resend,attempts};
+    if(!gmailConfigured(env))return {...resend,attempts};
+    // Definitive rejection from Resend: the message was not accepted, so trying
+    // the second provider cannot duplicate it.
+    const gmail=await sendViaGmail(env,{to,subject,html,text});
+    attempts.push({provider:"gmail",status:gmail.status??null,outcome:gmail.ok?"accepted":(gmail.definitive?"rejected":"ambiguous")});
+    if(gmail.ok)return {ok:true,provider:"gmail",status:gmail.status,id:gmail.id||null,fallbackFrom:"resend",attempts};
+    if(gmail.skipped==="no-gmail-credentials")return {...resend,attempts};
+    return {ok:false,provider:"gmail",status:gmail.status??null,error:gmail.error||resend.error||"send failed",definitive:gmail.definitive!==false,fallbackFrom:"resend",attempts};
   }
+
   const gmail=await sendViaGmail(env,{to,subject,html,text});
   if(gmail.skipped==="no-gmail-credentials")return {skipped:"no-provider"};
-  return gmail;
+  attempts.push({provider:"gmail",status:gmail.status??null,outcome:gmail.ok?"accepted":(gmail.definitive?"rejected":"ambiguous")});
+  return gmail.ok?{...gmail,attempts}:{...gmail,attempts};
 }
 
 export async function sendCustomerOrderConfirmation(env,{to,customerName,orderNumber,items,subtotal,shipping,total,tracking}){
