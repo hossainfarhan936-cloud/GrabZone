@@ -42,7 +42,7 @@ async function ensureSchema(env){
  }
  return schemaPromise;
 }
-const DHAKA_METRO=new Set(["Adabor","Dhaka Airport","Badda","Banani","Bangshal","Bhashantek","Dhaka Cantonment","Dhaka Chackbazar","Dakshin Khan","Darus-Salam","Demra","Dhanmondi","Gandaria","Gulshan","Hatirjheel","Hazaribagh","Jatrabari","Kadamtoli","Kafrul","Kalabagan","Kamrangirchar","Khilkhet","Khilgaon","Kotwali","Lalbagh","Mirpur Model","Mohammadpur","Motijheel","Mugda","Dhaka New Market","Pallabi","Paltan Model","Ramna Model","Rampura","Rupnagar","Sabujbag","Shah Ali","Shahbag","Shahjahanpur","Sher-e-Bangla Nagar","Shyampur","Sutrapur","Tejgaon","Tejgaon Industrial","Turag","Uttar Khan","Vatara","Uttara East","Uttara West","Wari"]);
+/* Location-based shipping removed: every vendor rate applies to the whole country. */
 
 const json=(x,s=200,h={})=>{if(s&&typeof s==="object"){h=s;s=200}return new Response(JSON.stringify(x),{status:s,headers:{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store",...h}})};
 const txt=(x,s=200,h={})=>new Response(x,{status:s,headers:h});

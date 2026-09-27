@@ -6,3 +6,14 @@ README.md
 api/
 supabase/
 node_modules/
+# Backend source must never be downloadable as a static asset.
+# The Worker bundle is built from these files by wrangler; they are not fetched
+# at runtime, so removing them from the asset set cannot break the API.
+*.mjs
+*.jsonc
+*.md
+.env
+.env.*
+.gitignore
+.assetsignore
+migrations/

@@ -49,6 +49,13 @@ async function loadGrabPointsSettings(){try{const{data,error}=await d1.from('sit
 function loadMystery(){const x=read('grabzone_mystery_v1',null);if(x?.token&&x?.expires_at&&Date.parse(x.expires_at)>Date.now())mysteryState={token:String(x.token),discount:Number(x.discount||0)};else{mysteryState={token:'',discount:0};try{localStorage.removeItem('grabzone_mystery_v1')}catch{}}}
 const msg=(t,error=false)=>{const e=$('checkoutMessage');if(e){e.textContent=t||'';e.className='checkout-message'+(error?' error':'')}};
 const subtotal=()=>checkoutItems.reduce((s,i)=>s+Number(i.price||0)*Number(i.quantity||0),0);
+/*
+  Delivery charge = the sum of each vendor's configured shipping fee, for every
+  customer location. There is deliberately no Dhaka / outside-Dhaka branch: the
+  same vendor rate applies everywhere in Bangladesh. The server recalculates
+  this from the vendor records when the order is created, so a tampered client
+  value cannot change what the customer is charged.
+*/
 const shippingForLocation=()=>marketplaceShipping;
 function deliveryEtaForLocation(division,district){
   const d=String(district||'').toLowerCase(),v=String(division||'').toLowerCase();
@@ -456,7 +463,7 @@ async function submit(e){
   const confirmed=await openOrderConfirm(d);
   if(!confirmed)return;
   const b=$('placeOrderBtn');b.disabled=true;b.textContent='Placing order…';msg('');
-  const shipping=shippingForLocation(d.division);
+  const shipping=shippingForLocation();
   const payload={
     customer_name:d.customer_name,email:d.email,phone:d.phone,division:d.division,
     district:d.district,upazila:d.upazila,address:d.address,
