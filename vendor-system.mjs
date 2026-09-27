@@ -3,6 +3,7 @@
  * storefronts, shipments, commission reporting and marketplace-aware order/tracking.
  */
 import legacy from './worker.mjs';
+import { gzApplyCors, gzPreflight } from './cors-policy.mjs';
 
 const VENDOR_SCHEMA = [
 `CREATE TABLE IF NOT EXISTS vendors (
@@ -180,5 +181,5 @@ async function api(req,env){const p=new URL(req.url).pathname;await ensureSchema
  if(p==='/api/send-order-email'&&req.method==='POST'){const clone=req.clone();let b={};try{b=await clone.json()}catch{};const num=clean(b.orderNumber,100);const o=num?await one(env,'SELECT id FROM orders WHERE order_number=? LIMIT 1',[num]):null;if(o&&await one(env,'SELECT id FROM vendor_orders WHERE order_id=? LIMIT 1',[o.id])){await notifyCustomer(env,num);return json({ok:true,marketplace:true})}return legacy.fetch(req,env)}
  return null;
 }
-async function handle(req,env){try{if(req.method==='OPTIONS'){const h=new Headers({'Access-Control-Allow-Origin':req.headers.get('Origin')||'*','Access-Control-Allow-Credentials':'true','Access-Control-Allow-Methods':'GET,POST,PATCH,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,X-GrabZone-Token'});return new Response(null,{status:204,headers:h})}const r=await api(req,env);if(r){const h=new Headers(r.headers),o=req.headers.get('Origin');h.set('Access-Control-Allow-Origin',o||'*');h.set('Access-Control-Allow-Credentials','true');h.append('Vary','Origin');return new Response(r.body,{status:r.status,headers:h})}const r2=await legacy.fetch(req,env);return r2}catch(e){console.error(e);return json({error:e.message||'Internal server error.'},500)}}
+async function handle(req,env){try{if(req.method==='OPTIONS')return gzPreflight(req,env);const r=await api(req,env);if(r)return gzApplyCors(r,req,env);const r2=await legacy.fetch(req,env);return r2}catch(e){console.error(e);return json({error:e.message||'Internal server error.'},500)}}
 export default {fetch:handle};
