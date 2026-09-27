@@ -35,7 +35,7 @@ async function schema(e) {
     `CREATE TABLE IF NOT EXISTS variation_options(variation_id TEXT NOT NULL,option_id TEXT NOT NULL,option_value_id TEXT NOT NULL,PRIMARY KEY(variation_id,option_id))`,
     `CREATE TABLE IF NOT EXISTS variation_images(id TEXT PRIMARY KEY,variation_id TEXT NOT NULL,image_url TEXT NOT NULL,sort_order INTEGER DEFAULT 0,created_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS inventory_log(id TEXT PRIMARY KEY,product_id TEXT,variation_id TEXT,vendor_id TEXT,change_qty INTEGER NOT NULL,reason TEXT NOT NULL,reference_id TEXT,created_at TEXT NOT NULL)`
-  ]) await e.DB.prepare(sql).run().catch(() => {}); await e.DB.prepare("ALTER TABLE product_variations ADD COLUMN stock_mode TEXT NOT NULL DEFAULT 'untracked'").run().catch(() => {}); await e.DB.prepare("UPDATE product_variations SET stock_mode='untracked',low_stock_threshold=0,min_qty=1,max_qty=NULL WHERE stock_mode IS NULL OR stock_mode='untracked'").run().catch(() => {});
+  ]) await e.DB.prepare(sql).run().catch(() => {}); await e.DB.prepare("ALTER TABLE product_variations ADD COLUMN stock_mode TEXT NOT NULL DEFAULT 'untracked'").run().catch(() => {}); await e.DB.prepare("UPDATE product_variations SET stock_mode='tracked' WHERE stock_mode='untracked' AND (COALESCE(stock,0)>0 OR status='Out of Stock')").run().catch(() => {});
 }
 
 function opts(b) {
