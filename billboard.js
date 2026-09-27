@@ -21,8 +21,19 @@ function gzBillboardEsc(value){
   }[ch]));
 }
 
+/*
+  Billboard rows live in D1 and were authored before the domain moved.
+  Rewrite the retired hosts to the live one so a stored link can never send a
+  customer to a dead address again.
+*/
+function gzBillboardCanonicalHost(value){
+  return String(value || "")
+    .replace(/^https?:\/\/(?:www\.)?grab-zone-ten\.vercel\.app/i, "https://grabzone.tech")
+    .replace(/^https?:\/\/(?:www\.)?grabzone\.store/i, "https://grabzone.tech");
+}
+
 function gzBillboardNormalizeUrl(url){
-  const value = String(url || "").trim();
+  const value = gzBillboardCanonicalHost(String(url || "").trim());
   if(!value) return "";
   if(/^https?:\/\//i.test(value) || value.startsWith("/") || value.startsWith("#")) return value;
   if(/^[a-z0-9_-]+\.html(?:\?|#|$)/i.test(value)) return value;
@@ -118,6 +129,8 @@ function renderBillboard(){
 
   GZ_BILLBOARDS.forEach((item,i)=>{
     const link=gzBillboardNormalizeUrl(item.link_url);
+    /* The stored label often already ends in an arrow; the markup adds one too. */
+    const buttonText=String(item.button_text||"").replace(/\s*(?:→|➜|➝|->|=>)\s*$/,"").trim();
     const card=document.createElement(link ? "a" : "div");
     card.className="gz-billboard-slide";
     card.dataset.index=String(i);
@@ -136,7 +149,7 @@ function renderBillboard(){
           ${item.eyebrow ? `<span>${gzBillboardEsc(item.eyebrow)}</span>` : ""}
           ${item.title ? `<strong>${gzBillboardEsc(item.title)}</strong>` : ""}
           ${item.message ? `<p>${gzBillboardEsc(item.message)}</p>` : ""}
-          ${item.button_text && link ? `<b>${gzBillboardEsc(item.button_text)} <i>→</i></b>` : ""}
+          ${buttonText && link ? `<b>${gzBillboardEsc(buttonText)} <i>→</i></b>` : ""}
         </div>
       </div>
     `;
