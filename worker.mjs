@@ -496,8 +496,11 @@ async function emailStatus(req,env){
 async function email(req,env){
  const b=await req.json().catch(()=>({}));
  const isOrderCreatedEmail=String(b.type||"").trim()==="order_created";
- const s=isOrderCreatedEmail?null:await session(req,env);
- if(!isOrderCreatedEmail&&!s)return json({error:"Unauthorized."},401);
+ // create_public_order already sends the customer confirmation. Avoid a second
+ // status-update email from checkout for the same order-created event.
+ if(isOrderCreatedEmail)return json({ok:true,skipped:true,reason:"confirmation_sent_during_order_creation"});
+ const s=await session(req,env);
+ if(!s)return json({error:"Unauthorized."},401);
  const num=String(b.orderNumber||"").trim();
  if(!num)return json({error:"Missing order number."},400);
  const o=(await q(env,"SELECT * FROM orders WHERE order_number=? LIMIT 1",[num])).results?.[0];
