@@ -604,12 +604,19 @@ async function load() {
     await loadSettings();
     applySiteSettings();
 
-    await Promise.all([
-      loadProducts(),
-      loadNotices()
-    ]);
-
+    /*
+      Render the catalogue and the product detail FIRST.
+      loadNotices() animates the marquee and waits on requestAnimationFrame,
+      which never fires in a backgrounded/hidden tab — sequencing it ahead of
+      renderDetail() left every product page stuck on "Loading product...".
+      Notices are cosmetic, so they now run last and never block.
+    */
+    await loadProducts();
     await renderDetail();
+
+    loadNotices().catch(error => {
+      console.warn("Notice load skipped:", error);
+    });
   } catch (error) {
     console.error("Website loading error:", error);
   }
@@ -650,6 +657,25 @@ function setText(id, value) {
   ) {
     element.textContent = value;
   }
+}
+
+/*
+  site_settings stores the header links as bare in-page anchors ("#shop").
+  Those anchors only exist on index.html, so on every other page the link did
+  nothing. Prefix the homepage when the anchor is not present in this document.
+*/
+function gzResolveHeaderLink(value) {
+  const url = String(value || "").trim();
+
+  if (!url) return url;
+
+  const anchor = url.match(/^#([A-Za-z0-9_-]+)$/);
+
+  if (anchor && !document.getElementById(anchor[1])) {
+    return "index.html" + url;
+  }
+
+  return url;
 }
 
 function setHref(id, value) {
@@ -708,8 +734,8 @@ function applySiteSettings() {
   setText("nav2", SITE.header_link2_label);
   setText("nav3", SITE.header_link3_label);
 
-  setHref("nav1", SITE.header_link1_url);
-  setHref("nav2", SITE.header_link2_url);
+  setHref("nav1", gzResolveHeaderLink(SITE.header_link1_url));
+  setHref("nav2", gzResolveHeaderLink(SITE.header_link2_url));
   setHref("nav3", SITE.header_link3_url);
 
   setText("heroButton", SITE.hero_button_text);
@@ -1287,9 +1313,16 @@ async function loadNotices() {
     Wait for layout so the real rendered width can be measured.
   */
   await new Promise(resolve => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(resolve);
-    });
+    /*
+      requestAnimationFrame does not fire in a backgrounded tab, so never
+      wait on it without a fallback timer.
+    */
+    const finish = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, 150);
+    requestAnimationFrame(() => requestAnimationFrame(finish));
   });
 
   const trackWidth = track.getBoundingClientRect().width;
