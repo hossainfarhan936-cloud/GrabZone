@@ -18,6 +18,14 @@
 .gz-billboard-dots{position:absolute;left:50%;bottom:13px;z-index:4;transform:translateX(-50%);display:flex;align-items:center;gap:6px}.gz-billboard-dot{width:7px;height:7px;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.58);cursor:pointer;transition:width .2s ease,background .2s ease}.gz-billboard-dot.active{width:22px;background:#fff}
 .gz-billboard[data-transition="fade"] .gz-billboard-track{position:relative;display:block;transform:none!important}.gz-billboard[data-transition="fade"] .gz-billboard-slide{position:absolute;inset:0;opacity:0;visibility:hidden;transition:opacity .55s ease,visibility .55s ease}.gz-billboard[data-transition="fade"] .gz-billboard-slide.active{opacity:1;visibility:visible}
 .gz-billboard-empty{width:100%;height:100%;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;padding:32px;color:#fff;background:#101820}.gz-billboard-empty span{font-size:10px;font-weight:900;letter-spacing:.16em;margin-bottom:9px}.gz-billboard-empty strong{font-size:clamp(28px,4vw,52px);line-height:1}
+/*
+  On phones the round arrows sat on top of the headline baked into the banner
+  artwork ("WE ARE BACK!" / "TAKING ORDERS FROM TODAY!"). Swipe and the dots
+  already move the carousel, so the arrows are removed at this width and the
+  dots are enlarged for touch.
+*/
+@media(max-width:600px){.gz-billboard-arrow{display:none!important}.gz-billboard-dots{bottom:10px;gap:9px}.gz-billboard-dot{width:9px;height:9px}.gz-billboard-dot.active{width:26px}}
+
 @media(max-width:760px){.gz-billboard{height:min(420px,72vw);min-height:250px;border-radius:20px}.gz-billboard-overlay{padding:18px}.gz-billboard-copy{max-width:88%}.gz-billboard-copy>strong{font-size:clamp(25px,8vw,42px)}.gz-billboard-copy>p{font-size:12px}.gz-billboard-arrow{width:36px;height:36px;font-size:25px}.gz-billboard-prev{left:9px}.gz-billboard-next{right:9px}}
 
 /* Broken remote media fallback */

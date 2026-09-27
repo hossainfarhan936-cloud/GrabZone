@@ -197,9 +197,15 @@ button{cursor:pointer}
   .header{gap:6px!important;padding-left:10px!important;padding-right:8px!important;}
   .header .brand{flex:1 1 auto!important;min-width:0!important;width:auto!important;max-width:none!important;gap:7px!important;white-space:nowrap!important;overflow:visible!important;}
   .header .brand .brand-mark{flex:0 0 34px!important;}
-  .header .brand #storeName{display:block!important;flex:0 1 auto!important;min-width:max-content!important;white-space:nowrap!important;overflow:visible!important;font-size:13px!important;letter-spacing:-.03em!important;}
+  .header .brand #storeName{display:block!important;flex:0 1 auto!important;min-width:0!important;max-width:100%!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;font-size:13px!important;letter-spacing:-.03em!important;}
   .header-actions{flex:0 0 auto!important;gap:2px!important;}
   .mobile-menu-btn{flex:0 0 42px!important;}
+  /*
+    The Rewards pill duplicated the Rewards tab in the mobile bottom bar and
+    took ~97px the store name needed, which pushed the language switch on top
+    of "GrabZone". Drop it here; the tab bar keeps Rewards reachable.
+  */
+  #gzRewardsNav{display:none!important;}
 }
 @media(max-width:380px){
   .header .brand #storeName{font-size:12px!important;letter-spacing:-.04em!important;}
