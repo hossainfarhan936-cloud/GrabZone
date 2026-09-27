@@ -334,7 +334,24 @@ for(const i of items){
 }
 
 try{await sendCustomerOrderConfirmation(env,{to:String(p.email||"").trim().toLowerCase(),customerName:String(p.customer_name||"").trim(),orderNumber,items,subtotal,shipping,total,tracking});}catch(e){console.error("Customer order confirmation email skipped:",e)}
-return{data:{id,order_number:orderNumber,public_tracking_id:tracking,subtotal,shipping_charge:shipping,referral_discount:discount,rewards_voucher_code:voucherCode||null,rewards_voucher_discount:voucherDiscount,mystery_discount:mysteryDiscount,grabpoints_opt_in:Number(p.grabpoints_opt_in||0)===1,total,status:"New"}}}
+// Notify each assigned vendor when the order is placed. Customer and vendor
+// emails are separate messages sent through the same Resend API key.
+try{
+ const groups=new Map();
+ for(const item of items){
+  const vid=String(item.vendor_id||"").trim();
+  if(!vid)continue;
+  if(!groups.has(vid))groups.set(vid,[]);
+  groups.get(vid).push(item);
+ }
+ for(const [vendorId,vendorItems] of groups){
+  const vendor=(await q(env,"SELECT COALESCE(brand_name,business_name,slug,'GrabZone Vendor') vendor_name,email FROM vendors WHERE id=? LIMIT 1",[vendorId])).results?.[0];
+  if(!vendor?.email){console.warn("Vendor order email skipped: vendor email is missing",vendorId);continue;}
+  const vendorSubtotal=vendorItems.reduce((sum,item)=>sum+Number(item.line_total||0),0);
+  await sendVendorOrderEmail(env,{to:vendor.email,vendorName:vendor.vendor_name,orderNumber,items:vendorItems,subtotal:vendorSubtotal});
+ }
+}catch(e){console.error("Vendor new-order notification failed:",e)}
+return{data:{id,order_number:orderNumber,public_tracking_id:tracking,subtotal,shipping_charge:shipping,referral_discount:discount,rewards_voucher_code:voucherCode||null,rewards_voucher_discount:voucherDiscount,mystery_discount:mysteryDiscount,grabpoints_opt_in:Number(p.grabpoints_opt_in||0)===1?1:0,total,status:"New"}}}
 if(!isAdmin)throw new Error("Unauthorized.");throw new Error("Unsupported RPC.")}
 async function d1(req,env){await ensureSchema(env);if(req.method==="GET"){try{await q(env,"SELECT 1 AS ok");return json({ok:true,d1:true})}catch(e){return json({ok:false,d1:false,error:e.message},500)}}if(req.method!=="POST")return json({error:"Method not allowed."},405);let p={};try{p=await req.json()}catch{return json({error:"Invalid JSON."},400)}try{if(!p.type){if(p.table)p.type="table";else if(p.fn)p.type="rpc";}const pub=p.type==="rpc"&&["get_public_tracking_id","validate_referral_code","track_public_order","create_public_order","grabpoints_balance","validate_rewards_voucher","claim_mystery","rewards_public_settings","rewards_register","rewards_login","rewards_forgot_pin","rewards_verify_reset","rewards_reset_pin","rewards_me","rewards_history","rewards_tier_history","rewards_order_history","rewards_redeem"].includes(String(p.fn||""));const needs=p.type==="table"?(!["select"].includes(String(p.action||"select"))||!PUBLIC_TABLES.has(String(p.table||""))):p.type==="rpc"?!pub:true;const s=needs?await session(req,env):null;if(needs&&!s)throw new Error("Unauthorized.");if(p.type==="table")return json(await table(req,env,p,!!s));if(p.type==="rpc")return json(await rpc(env,p.fn,p.args||{},!!s));throw new Error("Invalid database request.");}catch(e){return json({error:e.message||"Database request failed."},/Unauthorized|authentication/i.test(e.message||"")?401:/Invalid|Unknown|Unsupported/i.test(e.message||"")?400:500)}}
 async function track(req,env){const id=new URL(req.url).searchParams.get("trackingId");if(!id)return json({error:"Tracking ID is required."},400);try{return json({success:true,order:(await rpc(env,"track_public_order",{p_tracking_id:id},false)).data})}catch(e){return json({error:e.message},404)}}
