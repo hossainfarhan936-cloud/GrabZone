@@ -172,11 +172,12 @@
    const marketplace=await fetch('/api/marketplace/track?tracking_id='+encodeURIComponent(clean),{cache:'no-store'});
    let md={}; try{md=await marketplace.json()}catch{}
    if(marketplace.ok&&md.order)return {success:true,order:{...md.order,orderNumber:md.order.order_number,items:[],vendors:md.vendors||[]}};
-   if(!window.grabzoneD1) throw new Error(md.error||'Tracking service is not configured.');
-   const sb=window.grabzoneD1;
-   const {data,error}=await sb.rpc('track_public_order',{p_tracking_id:clean});
-   if(!error&&data) return {success:true,order:data};
-   console.warn('Direct tracking RPC failed:',error);
+   /*
+     Customer tracking goes through the Worker route. The direct D1 RPC call
+     that ran first is removed: the anon key is refused by track_public_order,
+     so it produced a warning plus a console error on every lookup and then
+     fell through to this route anyway.
+   */
    const response=await fetch('/api/track-order?trackingId='+encodeURIComponent(clean),{cache:'no-store'});
    let body={}; try{body=await response.json()}catch{}
    if(!response.ok) throw new Error(body.error||'Order not found. Please check your Order ID.');

@@ -5,9 +5,23 @@ window.GRABZONE_CONFIG = {
   storeName: "GRABZONE",
   tagline: "Grab What's Trending.",
   currency: "৳",
+  /*
+    One flat, vendor-configured delivery charge for the whole country.
+    The old dhakaShippingCharge / outsideDhakaShippingCharge keys are gone on
+    purpose: shipping must never be adjusted by the customer's city, district
+    or division. Each vendor's own shipping_fee is what applies, and it is the
+    same for every delivery address in Bangladesh.
+  */
   shippingCharge: 130,
-  dhakaShippingCharge: 70,
-  outsideDhakaShippingCharge: 130,
+  /*
+    Performance switch for the oversized R2 images (one banner alone is 888 KB).
+    Leave false until Cloudflare Image Resizing is enabled on the grabzone.tech
+    zone; then set it true and the card renderers will request
+    /cdn-cgi/image/width=... ,format=auto/ variants instead of the originals.
+    Enabling the feature on the zone is a Cloudflare configuration change and
+    needs the owner's approval.
+  */
+  imageTransform: false,
   whatsapp: "https://wa.me/8801XXXXXXXXX",
   messenger: "https://m.me/yourpage",
   instagram: "https://instagram.com/yourstore"

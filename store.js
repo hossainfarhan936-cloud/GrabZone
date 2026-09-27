@@ -976,6 +976,91 @@ function renderProducts() {
       .trim()
       .toLowerCase();
 
+  /*
+    Bangla search.
+    The catalogue is named in English, so a Bangla query used to match nothing.
+    Each Bangla term below maps to the English words the products actually use;
+    a query token matches when any of its synonyms appears in the searchable
+    text. English queries are untouched — they still go through the exact same
+    substring test first.
+  */
+  const GZ_BN_SYNONYMS = {
+    "ঘড়ি": ["watch", "smartwatch", "tissot", "combo"],
+    "জুতা": ["shoe", "shoes", "sneaker", "sandal", "keds"],
+    "শার্ট": ["shirt", "polo", "tshirt"],
+    "পাঞ্জাবি": ["panjabi", "punjabi", "kurta"],
+    "বোরকা": ["borkha", "burqa", "abaya", "koti", "gown", "hijab"],
+    "বুর্কা": ["borkha", "burqa", "abaya", "koti", "gown", "hijab"],
+    "হিজাব": ["hijab", "borkha", "abaya"],
+    "ইয়ারফোন": ["earbuds", "earphone", "headphone", "buds", "plextone"],
+    "ইয়ারফোনস": ["earbuds", "earphone", "headphone", "buds"],
+    "হেডফোন": ["headphone", "headset", "earphone"],
+    "স্পিকার": ["speaker", "sound", "boombox", "subwoofer"],
+    "পাওয়ার ব্যাংক": ["power bank", "powerbank", "power", "baseus"],
+    "পাওয়ারব্যাংক": ["power bank", "powerbank", "power"],
+    "চার্জার": ["charger", "charging", "adapter"],
+    "ফ্যান": ["fan", "cooler"],
+    "কুলার": ["cooler", "fan"],
+    "লাইট": ["light", "lamp", "led", "bulb"],
+    "বাতি": ["light", "lamp", "led", "bulb"],
+    "লাইটিং": ["light", "lamp", "led"],
+    "সোলার": ["solar", "panel"],
+    "কেটলি": ["kettle", "heater"],
+    "গিমবাল": ["gimbal", "stabilizer"],
+    "মাউস": ["mouse"],
+    "কীবোর্ড": ["keyboard"],
+    "ক্যামেরা": ["camera"],
+    "পারফিউম": ["perfume", "attar"],
+    "ব্যাগ": ["bag", "backpack"],
+    "মোবাইল": ["mobile", "phone", "smartphone"],
+    "ফোন": ["phone", "mobile", "smartphone"],
+    "ল্যাপটপ": ["laptop", "notebook"],
+    "স্ট্যান্ড": ["stand", "holder", "mount"],
+    "চশমা": ["sunglasses", "sunglass", "glasses", "glass"],
+    "ছাতা": ["umbrella"],
+    "রাউটার": ["router", "hotspot", "wifi", "modem"],
+    "ঘড়ির": ["watch", "smartwatch"],
+    "পাওয়ার": ["power", "powerbank"],
+    "ঘড়ি-ব্যান্ড": ["watch", "strap"],
+    "খেলনা": ["toy", "toys"],
+    "গেমিং": ["gaming", "game", "gamer"],
+    "ইলেকট্রনিক্স": ["electronics"],
+    "ফ্যাশন": ["fashion"],
+    "এক্সেসরিজ": ["accessories", "accessory"],
+    "বিউটি": ["beauty"],
+    "কিচেন": ["kitchen"],
+    "রান্নাঘর": ["kitchen"],
+    "ডেকোরেটিং": ["decorating", "decor", "decoration"],
+    "হোম": ["home", "household"],
+    "অফার": ["offer", "sale", "discount"],
+    "ছাড়": ["discount", "offer", "sale"]
+  };
+
+  const gzQueryTokens = query.split(/\s+/).filter(Boolean);
+
+  /*
+    English synonyms must match as whole words: a plain substring test made
+    "light" hit "lightweight" and "power" hit "powerful", so a Bangla query for
+    a lamp returned half the catalogue.
+  */
+  const gzWordPattern = (word) => {
+    const escaped = String(word).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const isAscii = /^[a-z0-9]+$/i.test(word);
+
+    return isAscii
+      ? new RegExp("(^|[^a-z0-9])" + escaped + "([^a-z0-9]|$)", "i")
+      : new RegExp(escaped, "i");
+  };
+
+  const gzBanglaMatch = (haystack) =>
+    gzQueryTokens.some(token => {
+      const synonyms = GZ_BN_SYNONYMS[token];
+
+      if (!synonyms) return false;
+
+      return synonyms.some(word => gzWordPattern(word).test(haystack));
+    });
+
   const filtered = allProducts.filter(product => {
     const category =
       String(product.category || "")
@@ -995,7 +1080,7 @@ function renderProducts() {
 
     return (
       categoryMatches &&
-      searchableText.includes(query)
+      (searchableText.includes(query) || gzBanglaMatch(searchableText))
     );
   });
 
@@ -1029,6 +1114,7 @@ function renderProducts() {
             src="${escAttr(product.image_url)}"
             alt="${escAttr(product.name)}"
             loading="lazy"
+            decoding="async"
           >
         </div>
 
