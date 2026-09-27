@@ -116,14 +116,14 @@ const V2UI='<link rel="stylesheet" href="/vendor-system-v2.css?v=20260916-v5"><l
 const ADMIN_VAR_UI='<script src="/marketplace-admin-variations-ui.js?v=20260919-v5" data-grabzone-admin-variations-ui></script>';
 const LOADER='<script src="/grabzone-global-loader.js?v=20260916-notice11" data-grabzone-global-loader></script>',CART='<script src="/grabzone-cart-quantity-bridge.js" data-grabzone-cart-bridge></script>',MKT='<script defer src="/marketplace-reference-ui.js?v=20260911-final3" data-grabzone-marketplace-reference-ui></script>',HOME='<link rel="stylesheet" href="/marketplace-home-brand-premium.css?v=20260911-ref1"><script src="/grabzone-home-reference-marketplace.js?v=20260915-fullwidth3" data-grabzone-home-reference-marketplace></script><script src="/grabzone-home-layout-finalizer.js?v=20260912-final1" data-grabzone-home-layout-finalizer></script><script src="/grabzone-notice-sync.js?v=20260916-notice12" data-grabzone-notice-sync></script>',RESP='<link rel="stylesheet" href="/grabzone-site-responsive.css?v=20260912-final2" data-grabzone-final-visual-fix>';
 async function inject(r,req){if(!r.ok)return r;const type=r.headers.get('content-type')||'';if(!type.includes('text/html'))return r;let b=await r.text();const p=new URL(req.url).pathname,s=[];if(!b.includes('data-grabzone-global-loader'))s.push(LOADER);if(p==='/checkout.html'&&!b.includes('data-grabzone-cart-bridge'))s.push(CART);if((p==='/marketplace'||p==='/marketplace.html')&&!b.includes('data-grabzone-marketplace-reference-ui'))s.push(MKT);if(p==='/'||p==='/index.html')s.push(HOME);if(/^\/(admin|vendor-admin|marketplace-admin-orders|marketplace-vendor-control-v2|vendor-dashboard)(?:\.html)?$/i.test(p))s.push(UPLOAD_UI);if(/^\/(vendor-dashboard|vendor-admin|marketplace-vendor-control-v2|product|checkout)(?:\.html)?$/i.test(p))s.push(V2UI);if(p==='/marketplace-vendor-control-v2'||p==='/marketplace-vendor-control-v2.html')s.push(ADMIN_VAR_UI);else s.push(RESP);const out=/<head[^>]*>/i.test(b)?b.replace(/<head[^>]*>/i,m=>m+'\n'+s.join('\n')):s.join('\n')+b;const h=new Headers(r.headers);h.set('Cache-Control','no-store,must-revalidate');h.delete('Content-Length');return new Response(out,{status:r.status,statusText:r.statusText,headers:h})}
-export default{async fetch(req,env,ctx){try{const p=new URL(req.url).pathname;
+async function gzRoute(req,env,ctx){try{const p=new URL(req.url).pathname;
 /*
   Never serve backend source, config or migration files as static assets.
   Defence in depth on top of .assetsignore, which keeps them out of the asset
   upload in the first place. No page loads these paths at runtime.
 */
 if(req.method==='GET'||req.method==='HEAD'){
-  if(/\.(?:mjs|jsonc|sql|md)$/i.test(p)||/^\/(?:\.assetsignore|\.env(?:\.|$)|wrangler[^/]*\.jsonc|package(?:-lock)?\.json)$/i.test(p)){
+  if(/\.(?:mjs|jsonc|sql|md|log|toml)$/i.test(p)||/^\/\.git(?:\/|$)/i.test(p)||/^\/\.github(?:\/|$)/i.test(p)||/^\/\.wrangler(?:\/|$)/i.test(p)||/^\/(?:\.assetsignore|\.env(?:\.[^/]*)?|package(?:-lock)?\.json|vercel\.json|wrangler[^/]*\.jsonc)$/i.test(p)){
     return new Response('Not found',{status:404,headers:{'Content-Type':'text/plain; charset=utf-8'}});
   }
 }
@@ -138,23 +138,34 @@ if(!(p==='/api/d1'&&req.method==='POST')){
     if(legacy)return legacy;
   }
 }if(p==='/api/marketplace/notices'&&req.method==='GET'){const [rows,settings]=await Promise.all([env.DB.prepare('SELECT id,title,message,active,sort_order,created_at FROM notices WHERE active=1 ORDER BY sort_order ASC,created_at ASC').all(),env.DB.prepare('SELECT show_notice FROM site_settings WHERE id=1 LIMIT 1').all()]);const show=Number(settings.results?.[0]?.show_notice??1)!==0;return json({show_notice:show,notices:show?(rows.results||[]):[]})}if(p==='/api/marketplace/brands'&&req.method==='GET'){const rows=(await env.DB.prepare("SELECT id,slug,brand_name,business_name,logo_url,banner_url,description,featured FROM vendors WHERE LOWER(COALESCE(status,'Active'))='active' AND COALESCE(homepage_visible,1)=1 ORDER BY featured DESC,COALESCE(brand_name,business_name,slug) COLLATE NOCASE").all()).results||[];return json({brands:rows.map(v=>({...v,brand_name:v.brand_name||v.business_name||v.slug}))})}const pv=await publicVariations(req,env);if(pv)return pv;const ss=await shippingSettings(req,env);if(ss)return ss;const mm=await media(req,env);if(mm)return mm;const mktm=await marketplaceMedia(req,env);if(mktm)return mktm;const up=await upload(req,env);if(up)return up;const probeOrderEarly=req.method==='POST'&&new URL(req.url).pathname==='/api/d1'?await req.clone().json().catch(()=>null):null;const pathEarly=new URL(req.url).pathname;const adminVariationRoute=pathEarly==='/api/marketplace/admin/variations'||pathEarly.startsWith('/api/marketplace/admin/variations/');if(adminVariationRoute){const avEarly=await adminVariations.fetch(req,env,ctx,(r)=>vendorFinalizer.fetch(r,env,ctx,(x)=>vendorGenerator.fetch(x,env,ctx,(y)=>vendorV2.fetch(y,env,ctx,(z)=>legacyWorker.fetch(z,env,ctx)))));if(avEarly)return avEarly}const directVariation=/^\/api\/vendor\/variations(?:\/[^/]+)?$/.test(pathEarly)||/^\/api\/vendor\/variation(?:\/[^/]+)?$/.test(pathEarly)||/^\/api\/vendor\/variation_[^/]+$/.test(pathEarly);if(directVariation)return vendorV2.fetch(req,env,ctx,(x)=>legacyWorker.fetch(x,env,ctx));const marketplace=probeOrderEarly?.fn==='create_public_order'?null:await marketplaceComplete.fetch(req,env,ctx);if(marketplace)return marketplace;const terminal=(r)=>legacyWorker.fetch(r,env,ctx);const probeOrder=req.method==='POST'&&new URL(req.url).pathname==='/api/d1'?await req.clone().json().catch(()=>null):null;if(probeOrder?.fn==='create_public_order'){return legacyWorker.fetch(req,env,ctx)}const av=await adminVariations.fetch(req,env,ctx,(r)=>vendorFinalizer.fetch(r,env,ctx,(x)=>vendorGenerator.fetch(x,env,ctx,(y)=>vendorV2.fetch(y,env,ctx,terminal))));if(av)return av;const fin=await vendorFinalizer.fetch(req,env,ctx,(r)=>vendorGenerator.fetch(r,env,ctx,(x)=>vendorV2.fetch(x,env,ctx,terminal)));if(fin)return fin;const store=await vendorStore.fetch(req,env,ctx,(r)=>app.fetch(r,env,ctx));if(store)return store;const gen=await vendorGenerator.fetch(req,env,ctx,(r)=>vendorV2.fetch(r,env,ctx,(x)=>app.fetch(x,env,ctx)));if(gen)return gen;const v2=await vendorV2.fetch(req,env,ctx,(r)=>app.fetch(r,env,ctx));if(v2)return v2;const r=await app.fetch(req,env,ctx);
+return inject(r,req)}catch(e){return json({error:e?.message||'Marketplace runtime failed'},500)}}
+
 /*
-  Branded 404: when the runtime reaches this point for a missing page, serve
-  404.html instead of the host's default error page. Requests that Cloudflare
-  answers straight from the asset binding (paths outside run_worker_first)
-  never reach the Worker; see the PR for the one-line wrangler.jsonc change
-  that covers those too. That config change needs your approval to deploy.
+  Branded 404, applied to EVERY response this entry returns.
+  Any internal handler can answer 404 for a missing page and an empty body is
+  what the customer then sees, so the replacement happens in one place instead
+  of inside one branch of the routing chain.
 */
-if(r&&r.status===404&&(req.method==='GET'||req.method==='HEAD')&&env.ASSETS){
-  const wantsHtml=(req.headers.get('Accept')||'').includes('text/html')||!/\.[a-z0-9]{2,5}$/i.test(p);
-  if(wantsHtml){
-    try{
-      const notFound=await env.ASSETS.fetch(new Request(new URL('/404.html',req.url).toString(),{headers:req.headers}));
-      if(notFound&&notFound.ok){
-        const h=new Headers(notFound.headers);h.delete('Content-Length');
-        return new Response(notFound.body,{status:404,headers:h});
-      }
-    }catch(err){console.error('404 page fallback failed',err)}
+async function gzFinalize(req,env,res){
+  try{
+    if(!res||res.status!==404)return res;
+    const p=new URL(req.url).pathname;
+    // An unknown API path must stay machine readable; only pages get HTML.
+    if(p.startsWith('/api/'))return json({error:'Not found.'},404);
+    if(req.method!=='GET'&&req.method!=='HEAD')return res;
+    if(!env||!env.ASSETS)return res;
+    const accept=req.headers.get('Accept')||'';
+    const wantsHtml=accept.includes('text/html')||!/\.[a-z0-9]{2,5}$/i.test(p);
+    if(!wantsHtml)return res;
+    const nf=await env.ASSETS.fetch(new Request(new URL('/404.html',req.url).toString(),{headers:req.headers}));
+    if(!nf||!nf.ok)return res;
+    const h=new Headers(nf.headers);
+    h.delete('Content-Length');
+    h.set('Content-Type','text/html; charset=utf-8');
+    return new Response(nf.body,{status:404,statusText:'Not Found',headers:h});
+  }catch(err){
+    console.error('404 page fallback failed',err);
+    return res;
   }
 }
-return inject(r,req)}catch(e){return json({error:e?.message||'Marketplace runtime failed'},500)}}};
+export default{async fetch(req,env,ctx){return gzFinalize(req,env,await gzRoute(req,env,ctx))}};

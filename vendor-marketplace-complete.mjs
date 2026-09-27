@@ -1,4 +1,5 @@
 import legacy from './worker.mjs';
+import { gzApplyCors, gzPreflight } from './cors-policy.mjs';
 
 const now=()=>new Date().toISOString();
 const clean=(v,n=10000)=>String(v??'').trim().slice(0,n);
@@ -427,7 +428,30 @@ if(p==='/api/vendor/orders'){const orders=(await q(e,`SELECT vo.*,o.order_number
 if(p==='/api/vendor/order-status'&&req.method==='PATCH'){let b={};try{b=await req.json()}catch{return json({error:'Invalid JSON'},400)};const allowed=['New','Contacting','Confirmed','Processing','Shipped','Delivered','Cancelled'];if(!allowed.includes(b.status))return json({error:'Invalid status'},400);const o=await one(e,'SELECT * FROM vendor_orders WHERE id=? AND vendor_id=?',[clean(b.vendor_order_id,100),vid]);if(!o)return json({error:'Order not found'},404);await e.DB.prepare('UPDATE vendor_orders SET status=?,updated_at=? WHERE id=?').bind(b.status,now(),o.id).run();await parentStatus(e,o.order_id,b.status);await email(e,(await one(e,'SELECT order_number FROM orders WHERE id=?',[o.order_id]))?.order_number);return json({ok:true})}
 if(p==='/api/vendor/shipments'&&req.method==='POST'){let b={};try{b=await req.json()}catch{return json({error:'Invalid JSON'},400)};const o=await one(e,'SELECT vo.*,ord.order_number FROM vendor_orders vo JOIN orders ord ON ord.id=vo.order_id WHERE vo.id=? AND vo.vendor_id=?',[clean(b.vendor_order_id,100),vid]);if(!o)return json({error:'Vendor order not found'},404);if(!clean(b.courier,100)||!clean(b.tracking_id,200))return json({error:'Courier and tracking ID required'},400);const id=crypto.randomUUID(),t=now(),st=clean(b.status,40)||'Processing';if(!['New','Contacting','Confirmed','Processing','Shipped','Delivered','Cancelled'].includes(st))return json({error:'Invalid shipment status'},400);await e.DB.prepare('INSERT INTO shipments(id,order_id,vendor_id,courier,tracking_id,tracking_url,status,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').bind(id,o.order_id,vid,clean(b.courier,100),clean(b.tracking_id,200),clean(b.tracking_url,1000),st,clean(b.note,1000),t,t).run();await e.DB.prepare('UPDATE vendor_orders SET status=?,updated_at=? WHERE id=?').bind(st,t,o.id).run();await parentStatus(e,o.order_id,st);await e.DB.prepare('UPDATE orders SET tracking_provider=?,tracking_number=?,tracking_url=?,updated_at=? WHERE id=?').bind(clean(b.courier,100),clean(b.tracking_id,200),clean(b.tracking_url,1000),now(),o.order_id).run().catch(()=>{});await email(e,o.order_number);return json({ok:true,shipment_id:id})}}
 if(p==='/api/marketplace/brands'){const u=new URL(req.url),all=u.searchParams.get('all')==='1';const a=(await q(e,`SELECT id,slug,business_name,brand_name,logo_url,banner_url,description,tagline,accent_color,featured FROM vendors WHERE status='Active' ${all?'':'AND homepage_visible=1'} ORDER BY featured DESC,brand_name`)).results||[];return json({brands:a})}
-if(p==='/api/marketplace/products'){const u=new URL(req.url),v=clean(u.searchParams.get('vendor'),100),rawIds=String(u.searchParams.get('ids')||'').split(',').map(x=>clean(x,120)).filter(Boolean).slice(0,500);let sql="SELECT p.*,v.brand_name vendor_name,v.slug vendor_slug,v.logo_url vendor_logo,v.accent_color vendor_accent,v.shipping_fee vendor_shipping_fee FROM products p JOIN vendors v ON v.id=p.vendor_id WHERE p.published=1",ps=[];if(rawIds.length){sql+=' AND p.id IN ('+rawIds.map(()=>'?').join(',')+')';ps.push(...rawIds)}else{sql+=" AND v.status='Active'";if(v){sql+=' AND (v.slug=? OR v.id=?)';ps.push(v,v)}}const rows=(await q(e,sql+' ORDER BY p.created_at DESC',ps)).results||[];
+if(p==='/api/marketplace/products'){
+ const u=new URL(req.url),v=clean(u.searchParams.get('vendor'),100),rawIds=String(u.searchParams.get('ids')||'').split(',').map(x=>clean(x,120)).filter(Boolean).slice(0,500);
+ /*
+   Pagination. The defaults keep every existing caller working unchanged: the
+   storefront asks for limit=500 and still receives the whole catalogue, while a
+   caller that asks for one page now gets exactly that page, the total and a
+   has_more flag instead of the entire feed every time.
+ */
+ const MAX_LIMIT=500;
+ const askedLimit=Number(u.searchParams.get('limit'));
+ const limit=Number.isFinite(askedLimit)&&askedLimit>0?Math.min(MAX_LIMIT,Math.floor(askedLimit)):MAX_LIMIT;
+ const askedPage=Number(u.searchParams.get('page'));
+ const page=Number.isFinite(askedPage)&&askedPage>0?Math.floor(askedPage):1;
+ const rawOffset=u.searchParams.get('offset');
+ const askedOffset=rawOffset===null||rawOffset===''?NaN:Number(rawOffset);
+ const offset=Number.isFinite(askedOffset)&&askedOffset>=0?Math.floor(askedOffset):(page-1)*limit;
+ let where=" FROM products p JOIN vendors v ON v.id=p.vendor_id WHERE p.published=1",ps=[];
+ if(rawIds.length){where+=' AND p.id IN ('+rawIds.map(()=>'?').join(',')+')';ps.push(...rawIds)}
+ else{where+=" AND v.status='Active'";if(v){where+=' AND (v.slug=? OR v.id=?)';ps.push(v,v)}}
+ const select="SELECT p.*,v.brand_name vendor_name,v.slug vendor_slug,v.logo_url vendor_logo,v.accent_color vendor_accent,v.shipping_fee vendor_shipping_fee";
+ const totalRow=(await q(e,'SELECT COUNT(*) n'+where,ps)).results?.[0];
+ const total=Number(totalRow?.n||0);
+ const rows=(await q(e,select+where+' ORDER BY p.created_at DESC LIMIT ? OFFSET ?',[...ps,limit,offset])).results||[];
+ const pagination={limit,page,offset,total,pages:Math.max(1,Math.ceil(total/limit)),has_more:offset+rows.length<total,count:rows.length};
 /*
   Admin console feed vs public catalogue feed.
   The admin table (marketplace-products.html) asks for scope=admin and must carry
@@ -439,10 +463,10 @@ if(p==='/api/marketplace/products'){const u=new URL(req.url),v=clean(u.searchPar
 const adminScope=u.searchParams.get('scope')==='admin';
 if(adminScope){
  if(!await admin(req,e))return json({error:'Unauthorized'},401);
- return json({products:rows});
+ return json({products:rows,pagination});
 }
 const PRIVATE_FIELDS=new Set(['business_koro_product_id','sku','stock','stock_mode','low_stock_threshold','vendor_featured']);
-return json({products:rows.map(row=>{const out={};for(const k of Object.keys(row)){if(!PRIVATE_FIELDS.has(k))out[k]=row[k]}return out})})}
+return json({products:rows.map(row=>{const out={};for(const k of Object.keys(row)){if(!PRIVATE_FIELDS.has(k))out[k]=row[k]}return out}),pagination})}
 if(p==='/api/marketplace/store'){const s=clean(new URL(req.url).searchParams.get('slug'),100),v=await one(e,"SELECT * FROM vendors WHERE slug=? AND status='Active'",[s]);if(!v)return json({error:'Store not found'},404);return json({vendor:v,products:(await q(e,'SELECT * FROM products WHERE vendor_id=? AND published=1 ORDER BY created_at DESC',[v.id])).results||[],sections:(await q(e,'SELECT * FROM vendor_store_sections WHERE vendor_id=? AND enabled=1 ORDER BY sort_order',[v.id])).results||[]})}
 if(p==='/api/marketplace/track'){return track(req,e,clean(new URL(req.url).searchParams.get('tracking_id'),120))}
 if(p==='/api/marketplace/order'&&req.method==='POST'){return json({error:'Use the existing checkout.'},400)}
@@ -493,5 +517,5 @@ async function track(req,e,id){const o=await one(e,'SELECT * FROM orders WHERE u
     o.total=Math.max(0,subtotal+resolvedShipping-discounts);
   }
   const statuses=vs.map(v=>String(v.status||'New'));let canonical=o.status||'New';if(statuses.length){if(statuses.every(s=>s==='Delivered'))canonical='Delivered';else if(statuses.every(s=>s==='Cancelled'))canonical='Cancelled';else if(statuses.every(s=>s==='Shipped'))canonical='Shipped';else if(statuses.every(s=>s==='Processing'))canonical='Processing';else if(statuses.every(s=>s==='Confirmed'))canonical='Confirmed';else if(statuses.every(s=>s==='Contacting'))canonical='Contacting';else if(statuses.some(s=>s==='Shipped'))canonical='Shipped';else if(statuses.some(s=>s==='Processing'))canonical='Processing';else if(statuses.some(s=>s==='Confirmed'))canonical='Confirmed';else if(statuses.some(s=>s==='Contacting'))canonical='Contacting';}return json({order:{...o,order_number:o.order_number,tracking_id:o.public_tracking_id,status:canonical},vendors:vs})}
-async function handle(req,e){try{if(req.method==='OPTIONS')return new Response(null,{status:204,headers:{'Access-Control-Allow-Origin':req.headers.get('Origin')||'*','Access-Control-Allow-Credentials':'true','Access-Control-Allow-Headers':'Content-Type,Authorization','Access-Control-Allow-Methods':'GET,POST,PATCH,OPTIONS'}});const r=await api(req,e);if(r){const h=new Headers(r.headers);h.set('Access-Control-Allow-Origin',req.headers.get('Origin')||'*');h.set('Access-Control-Allow-Credentials','true');return new Response(r.body,{status:r.status,headers:h})}return legacy.fetch(req,e)}catch(err){console.error(err);return json({error:err.message||'Internal server error'},500)}}
+async function handle(req,e){try{if(req.method==='OPTIONS')return gzPreflight(req,e);const r=await api(req,e);if(r)return gzApplyCors(r,req,e);return legacy.fetch(req,e)}catch(err){console.error(err);return gzApplyCors(json({error:err.message||'Internal server error'},500),req,e)}}
 export default {fetch:handle};

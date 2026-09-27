@@ -1,19 +1,32 @@
 worker.js
 wrangler.jsonc
+wrangler.toml
+wrangler.*.jsonc
 .env.example
+.env
+.env.*
 README.md
+*.md
 *.sql
+*.log
 api/
 supabase/
 node_modules/
+.wrangler/
+# Repository and build metadata must never be downloadable as a static asset.
+# Without these entries Cloudflare uploaded the CI checkout verbatim, which
+# exposed /.git/index (the full repository file list), /.git/config,
+# package.json and package-lock.json to anyone who asked for them.
+.git/
+.git*
+.github/
+package.json
+package-lock.json
+vercel.json
 # Backend source must never be downloadable as a static asset.
 # The Worker bundle is built from these files by wrangler; they are not fetched
 # at runtime, so removing them from the asset set cannot break the API.
 *.mjs
 *.jsonc
-*.md
-.env
-.env.*
-.gitignore
 .assetsignore
 migrations/

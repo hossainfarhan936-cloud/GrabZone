@@ -1,5 +1,6 @@
 /* GrabZone Cloudflare Worker backend: static assets + D1 + R2 + admin auth. */
 import { sendVendorOrderEmail, sendCustomerOrderConfirmation } from './grabzone-email.mjs';
+import { gzApplyCors, gzPreflight } from './cors-policy.mjs';
 const TABLES=new Set(["products","product_images","orders","order_items","billboards","billboard_settings","notices","referral_codes","site_settings","store_policies","customer_points","grabpoints_ledger","vendors","vendor_orders","vendor_order_items","shipments"]);
 const PUBLIC_TABLES=new Set(["products","product_images","notices","site_settings","billboards","billboard_settings","store_policies"]);
 const BOOLS=new Set(["drop_enabled","published","active","is_main","autoplay","show_arrows","show_dots","enabled","animation_enabled","show_notice","show_offer","show_how","show_referral","animations_enabled","page_load","scroll_reveal","product_hover","button_effects","hero_animation","floating_effects","notice_animation","magnetic_cursor","text_reveal","image_parallax","scroll_velocity","product_stagger","marquee_motion","header_scroll","premium_hover_glow","section_transitions","product_entrance","product_3d_tilt","product_image_zoom","product_image_parallax","product_cursor_spotlight","product_shine","product_hover_lift","product_featured_glow","billboard_animation","rewards_auth_animation","rewards_redeem_animation","rewards_redeem_sound","mobile_nav_animation","store_page_animation","cart_animation","modal_animation","micro_interactions","global_transitions"]);
@@ -72,12 +73,12 @@ if(envEmail&&envPass){
   else{await env.DB.prepare("INSERT INTO admin_users(id,email,password_hash,password_salt,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(id,envEmail,hash,salt,t,t).run();u={id,email:envEmail};}
 }else{
   u=(await q(env,"SELECT * FROM admin_users WHERE lower(email)=lower(?) LIMIT 1",[email])).results?.[0]||null;
-  if(!u?.password_hash||!u?.password_salt)return json({error:"Admin account is not configured for this worker."},500);
+  if(!u?.password_hash||!u?.password_salt){console.error("admin login rejected: account row has no password hash/salt");return json({error:"Invalid email or password."},401)}
   const hash=await pbkdf(pass,u.password_salt);
   if(hash!==u.password_hash)return json({error:"Invalid email or password."},401);
 }const raw=crypto.randomUUID().replace(/-/g,"")+crypto.randomUUID().replace(/-/g,""),exp=new Date(Date.now()+604800000).toISOString();await env.DB.prepare("DELETE FROM admin_sessions WHERE expires_at<?").bind(t).run();await env.DB.prepare("INSERT INTO admin_sessions(token_hash,admin_user_id,expires_at,created_at) VALUES(?,?,?,?)").bind(await sha(raw),u.id,exp,t).run();return json({ok:true,user:{id:u.id,email:u.email},expires_at:exp,session_token:raw},200,{"Set-Cookie":"gz_admin_session="+encodeURIComponent(raw)+"; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=None"})}
 function whereSql(fs,ps){const a=[];for(const f of fs||[]){const c=ident(f.column);if(f.op==="eq"){a.push(c+"=?");ps.push(val(f.value))}else if(f.op==="neq"){a.push(c+"<>?");ps.push(val(f.value))}else if(f.op==="gt"){a.push(c+">?");ps.push(val(f.value))}else if(f.op==="gte"){a.push(c+">=?");ps.push(val(f.value))}else if(f.op==="lt"){a.push(c+"<?");ps.push(val(f.value))}else if(f.op==="lte"){a.push(c+"<=?");ps.push(val(f.value))}else if(f.op==="is")a.push(f.value===null?c+" IS NULL":c+" IS NOT NULL");else if(f.op==="in"){const x=Array.isArray(f.value)?f.value:[];if(!x.length)a.push("1=0");else{a.push(c+" IN("+x.map(()=>"?").join(",")+")");x.forEach(v=>ps.push(val(v)))}}else throw new Error("Unsupported filter.")}return a.length?" WHERE "+a.join(" AND "):""}
-async function table(req,env,p,isAdmin){const table=String(p.table||"");if(!TABLES.has(table))throw new Error("Unknown database table.");const action=p.action||"select";if(["vendors","vendor_orders","vendor_order_items"].includes(table)&&action!=="select")throw new Error("Marketplace order tables are read-only through this API.");if(action!=="select"&&!isAdmin)throw new Error("Unauthorized.");if(action==="select"&&!isAdmin&&!PUBLIC_TABLES.has(table))throw new Error("Unauthorized.");if(action==="select"){const ps=[];let w=whereSql(p.filters,ps);if(!isAdmin&&table==="products")w+=(w?" AND ":" WHERE ")+"published=1";if(!isAdmin&&table==="notices")w+=(w?" AND ":" WHERE ")+"active=1";if(!isAdmin&&table==="billboards")w+=(w?" AND ":" WHERE ")+"active=1";if(!isAdmin&&table==="product_images")w+=(w?" AND ":" WHERE ")+"EXISTS(SELECT 1 FROM products p WHERE p.id=product_images.product_id AND p.published=1)";if(!isAdmin&&table==="customer_points")throw new Error("Unauthorized.");if(!isAdmin&&table==="grabpoints_ledger")throw new Error("Unauthorized.");let c=p.columns||"*";if(c!=="*")c=c.split(",").map(x=>ident(x.trim())).join(",");let sql="SELECT "+c+" FROM "+ident(table)+w;if(p.orders?.length)sql+=" ORDER BY "+p.orders.map(o=>ident(o.column)+" "+(o.ascending===false?"DESC":"ASC")).join(",");if(p.limit!==null&&p.limit!==undefined)sql+=" LIMIT "+Math.max(0,Math.floor(Number(p.limit)||0));let rows=(await q(env,sql,ps)).results?.map(normalize)||[];
+async function table(req,env,p,isAdmin){const table=String(p.table||"");if(!TABLES.has(table))throw new Error("Unknown database table.");const action=p.action||"select";if(["vendors","vendor_orders","vendor_order_items"].includes(table)&&action!=="select")throw new Error("Marketplace order tables are read-only through this API.");if(action!=="select"&&!isAdmin)throw new Error("Unauthorized.");if(action==="select"&&!isAdmin&&!PUBLIC_TABLES.has(table))throw new Error("Unauthorized.");if(action==="select"){const ps=[];let w=whereSql(p.filters,ps);if(!isAdmin&&table==="products")w+=(w?" AND ":" WHERE ")+"published=1";if(!isAdmin&&table==="notices")w+=(w?" AND ":" WHERE ")+"active=1";if(!isAdmin&&table==="billboards")w+=(w?" AND ":" WHERE ")+"active=1";if(!isAdmin&&table==="product_images")w+=(w?" AND ":" WHERE ")+"EXISTS(SELECT 1 FROM products p WHERE p.id=product_images.product_id AND p.published=1)";if(!isAdmin&&table==="customer_points")throw new Error("Unauthorized.");if(!isAdmin&&table==="grabpoints_ledger")throw new Error("Unauthorized.");let c=p.columns||"*";if(c!=="*")c=c.split(",").map(x=>ident(x.trim())).join(",");let sql="SELECT "+c+" FROM "+ident(table)+w;if(p.orders?.length)sql+=" ORDER BY "+p.orders.map(o=>ident(o.column)+" "+(o.ascending===false?"DESC":"ASC")).join(",");if(p.limit!==null&&p.limit!==undefined)sql+=" LIMIT "+Math.max(0,Math.floor(Number(p.limit)||0));if(p.limit!==null&&p.limit!==undefined&&p.offset!==null&&p.offset!==undefined)sql+=" OFFSET "+Math.max(0,Math.floor(Number(p.offset)||0));let rows=(await q(env,sql,ps)).results?.map(normalize)||[];
 if(isAdmin&&table==="orders"&&rows.length){
   // Customer invoice values are authoritative. Never rewrite an order's
   // shipping_charge/total from vendor-order settings when an admin merely
@@ -557,30 +558,18 @@ async function shippingSettings(req,env){
 }
 async function api(req,env){const p=new URL(req.url).pathname;
 if(p==="/api/marketplace/shipping-settings")return shippingSettings(req,env);
-if(p==="/api/admin-auth")return auth(req,env);if(p==="/api/d1")return d1(req,env);if(p==="/api/track-order")return track(req,env);if(p==="/api/r2-upload")return upload(req,env);if(p.startsWith("/api/r2/"))return r2(req,env);if(p==="/api/r2-presign")return json({error:"Legacy upload endpoint removed. Use /api/r2-upload."},410);if(p==="/api/business-koro-order")return req.method==="POST"?business(req,env):json({error:"Method not allowed."},405);if(p==="/api/send-order-email"||p==="/send-order-email")return req.method==="POST"?email(req,env):json({error:"Method not allowed."},405);if(p==="/api/email/status")return req.method==="GET"?emailStatus(req,env):json({error:"Method not allowed."},405);if(p==="/api/sync-order-sheet")return req.method==="POST"?sheet(req,env):json({error:"Method not allowed."},405);if(p==="/api/product-reviews")return productReviews(req,env);if(p==="/api/product-review-photo")return productReviewPhoto(req,env);if(p==="/api/health")return json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET,admin_auth_configured:!!String(env.GRABZONE_ADMIN_EMAIL||"").trim()&&!!String(env.GRABZONE_ADMIN_PASSWORD||"")});return null}
-function cors(r,req){
- const h=new Headers(r.headers);
- const origin=req?.headers?.get("Origin")||"";
- if(origin){
-  h.set("Access-Control-Allow-Origin",origin);
-  h.set("Access-Control-Allow-Credentials","true");
-  h.append("Vary","Origin");
- }else{
-  h.set("Access-Control-Allow-Origin","*");
- }
- h.set("Access-Control-Allow-Methods","GET,POST,OPTIONS");
- h.set("Access-Control-Allow-Headers","Content-Type,Authorization,X-GrabZone-Token,Cache-Control");
- h.set("Access-Control-Max-Age","86400");
- return new Response(r.body,{status:r.status,statusText:r.statusText,headers:h});
+if(p==="/api/admin-auth")return auth(req,env);if(p==="/api/d1")return d1(req,env);if(p==="/api/track-order")return track(req,env);if(p==="/api/r2-upload")return upload(req,env);if(p.startsWith("/api/r2/"))return r2(req,env);if(p==="/api/r2-presign")return json({error:"Legacy upload endpoint removed. Use /api/r2-upload."},410);if(p==="/api/business-koro-order")return req.method==="POST"?business(req,env):json({error:"Method not allowed."},405);if(p==="/api/send-order-email"||p==="/send-order-email")return req.method==="POST"?email(req,env):json({error:"Method not allowed."},405);if(p==="/api/email/status")return req.method==="GET"?emailStatus(req,env):json({error:"Method not allowed."},405);if(p==="/api/sync-order-sheet")return req.method==="POST"?sheet(req,env):json({error:"Method not allowed."},405);if(p==="/api/product-reviews")return productReviews(req,env);if(p==="/api/product-review-photo")return productReviewPhoto(req,env);if(p==="/api/health")return json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET});return null}
+function cors(r,req,env){
+ return gzApplyCors(r,req,env);
 }
 async function handle(req,env){
  try{
-  if(req.method==="OPTIONS")return cors(new Response(null,{status:204}),req);
+  if(req.method==="OPTIONS")return gzPreflight(req,env);
   const a=await api(req,env);
-  return cors(a||(env.ASSETS?await env.ASSETS.fetch(req):json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET})),req);
+  return cors(a||(env.ASSETS?await env.ASSETS.fetch(req):json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET})),req,env);
  }catch(e){
   console.error(e);
-  return cors(json({error:e?.message||"Internal server error."},500),req);
+  return cors(json({error:e?.message||"Internal server error."},500),req,env);
  }
 }
 export default { fetch: handle };

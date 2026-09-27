@@ -1,4 +1,5 @@
 /* GrabZone Cloudflare Worker backend: static assets + D1 + R2 + admin auth. */
+import { gzApplyCors, gzPreflight } from './cors-policy.mjs';
 const TABLES=new Set(["products","product_images","orders","order_items","billboards","billboard_settings","notices","referral_codes","site_settings","store_policies","customer_points","grabpoints_ledger"]);
 const PUBLIC_TABLES=new Set(["products","product_images","notices","site_settings","billboards","billboard_settings","store_policies"]);
 const BOOLS=new Set(["drop_enabled","published","active","is_main","autoplay","show_arrows","show_dots","enabled","animation_enabled","show_notice","show_offer","show_how","show_referral","animations_enabled","page_load","scroll_reveal","product_hover","button_effects","hero_animation","floating_effects","notice_animation","magnetic_cursor","text_reveal","image_parallax","scroll_velocity","product_stagger","marquee_motion","header_scroll","premium_hover_glow","section_transitions","product_entrance","product_3d_tilt","product_image_zoom","product_image_parallax","product_cursor_spotlight","product_shine","product_hover_lift","product_featured_glow"]);
@@ -201,22 +202,17 @@ async function email(req,env){
 async function sheet(req,env){const missing=["GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","GOOGLE_REFRESH_TOKEN","GOOGLE_SHEETS_SPREADSHEET_ID"].filter(k=>!env[k]);if(missing.length)return json({ok:false,skipped:true,missing},200);try{const token=await gmailToken(env),sid=env.GOOGLE_SHEETS_SPREADSHEET_ID,base="https://sheets.googleapis.com/v4/spreadsheets/"+encodeURIComponent(sid),headers={Authorization:"Bearer "+token,"Content-Type":"application/json"},orders=(await q(env,"SELECT * FROM orders ORDER BY created_at ASC")).results||[],items=(await q(env,"SELECT * FROM order_items ORDER BY id ASC")).results||[],refs=(await q(env,"SELECT * FROM referral_codes ORDER BY created_at ASC")).results||[],by=new Map(),rm=new Map(refs.map(x=>[String(x.code||"").toUpperCase(),x]));for(const i of items){if(!by.has(i.order_id))by.set(i.order_id,[]);by.get(i.order_id).push(i)}const fmt=v=>v?new Intl.DateTimeFormat("en-US",{timeZone:"Asia/Dhaka",year:"numeric",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}).format(new Date(v)):"",rows=[["Order ID","Order Date (BDT)","Customer Name","Phone","Email","Delivery Address","District","Division","Thana / Upazila","Products","Qty","Subtotal","Discount","Shipping","Total","Payment Method","Status","Admin Code","Admin Name","Admin Email","Admin Benefit Type","Admin Benefit Value","Admin Code Usage","Admin Active","Tracking Provider","Tracking Number","Tracking URL","Updated (BDT)","Admin Note"]];for(const o of orders){const xs=by.get(o.id)||[],code=String(o.referral_code||"").toUpperCase(),a=rm.get(code);rows.push([o.order_number||"",fmt(o.created_at),o.customer_name||"",o.phone||"",o.email||"",o.address||"",o.district||"",o.division||"",o.upazila||"",xs.map(x=>x.product_name).join(" | "),xs.reduce((n,x)=>n+Number(x.quantity||0),0),Number(o.subtotal||0),Number(o.referral_discount||o.discount_amount||0),Number(o.shipping_charge||0),Number(o.total||0),o.payment_method||"Cash on Delivery",o.status||"New",code,a?.admin_name||o.referral_admin_name||"",a?.admin_email||"",a?.benefit_type||"",Number(a?.benefit_value||0),Number(a?.used_count||0),a?.active===false?"Disabled":"Active",o.tracking_provider||"",o.tracking_number||"",o.tracking_url||"",fmt(o.updated_at),o.admin_note||""])}const meta=await fetch(base+"?fields=sheets.properties",{headers}),md=await meta.json(),sh=md.sheets?.find(x=>x.properties?.title==="GZ Orders");if(sh){await fetch(base+"/values/"+encodeURIComponent("GZ Orders!A:AC")+"?valueInputOption=USER_ENTERED",{method:"PUT",headers,body:JSON.stringify({range:"GZ Orders!A:AC",majorDimension:"ROWS",values:rows})})}return json({ok:true,orders:orders.length})}catch(e){return json({error:e.message||"Google Sheets sync failed."},500)}}
 async function api(req,env){const p=new URL(req.url).pathname;
 if(p==="/api/admin-auth")return auth(req,env);if(p==="/api/d1")return d1(req,env);if(p==="/api/track-order")return track(req,env);if(p==="/api/r2-upload")return upload(req,env);if(p.startsWith("/api/r2/"))return r2(req,env);if(p==="/api/r2-presign")return json({error:"Legacy upload endpoint removed. Use /api/r2-upload."},410);if(p==="/api/business-koro-order")return req.method==="POST"?business(req,env):json({error:"Method not allowed."},405);if(p==="/api/send-order-email"||p==="/send-order-email")return req.method==="POST"?email(req,env):json({error:"Method not allowed."},405);if(p==="/api/sync-order-sheet")return req.method==="POST"?sheet(req,env):json({error:"Method not allowed."},405);if(p==="/api/product-reviews")return productReviews(req,env);if(p==="/api/product-review-photo")return productReviewPhoto(req,env);if(p==="/api/health")return json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET,admin_auth_configured:!!String(env.GRABZONE_ADMIN_EMAIL||"").trim()&&!!String(env.GRABZONE_ADMIN_PASSWORD||"")});return null}
-function cors(r){
- const h=new Headers(r.headers);
- h.set("Access-Control-Allow-Origin","*");
- h.set("Access-Control-Allow-Methods","GET,POST,OPTIONS");
- h.set("Access-Control-Allow-Headers","Content-Type,Authorization,X-GrabZone-Token,Cache-Control");
- h.set("Access-Control-Max-Age","86400");
- return new Response(r.body,{status:r.status,statusText:r.statusText,headers:h});
+function cors(r,req,env){
+ return gzApplyCors(r,req,env);
 }
 async function handle(req,env){
  try{
-  if(req.method==="OPTIONS")return cors(new Response(null,{status:204}));
+  if(req.method==="OPTIONS")return gzPreflight(req,env);
   const a=await api(req,env);
-  return cors(a||(env.ASSETS?await env.ASSETS.fetch(req):json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET})));
+  return cors(a||(env.ASSETS?await env.ASSETS.fetch(req):json({ok:true,backend:"cloudflare-worker",d1:!!env.DB,r2:!!env.ASSETS_BUCKET})),req,env);
  }catch(e){
   console.error(e);
-  return cors(json({error:e?.message||"Internal server error."},500));
+  return cors(json({error:e?.message||"Internal server error."},500),req,env);
  }
 }
 export default { fetch: handle };
