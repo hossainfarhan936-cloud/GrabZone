@@ -1,3 +1,4 @@
+import { notifyVendorOrder } from './vendor-order-notify.mjs';
 const now=()=>new Date().toISOString();
 const clean=(v,n=10000)=>String(v??'').trim().slice(0,n);
 const json=(x,s=200)=>new Response(JSON.stringify(x),{status:s,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
@@ -35,21 +36,33 @@ async function snapshot(e,orderId,payload){const rows=(await q(e,'SELECT id,prod
 async function emailStatus(next,e,orderNumber,status){try{const a=await one(e,'SELECT id,email FROM admin_users ORDER BY created_at LIMIT 1');const secret=String(e.MARKETPLACE_AUTH_SECRET||e.D1_AUTH_SECRET||e.GRABZONE_ADMIN_PASSWORD||'');if(!a||!secret)return false;const payload=btoa(JSON.stringify({sub:a.id,email:a.email,exp:Math.floor(Date.now()/1000)+300})).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);const sig=[...new Uint8Array(await crypto.subtle.sign('HMAC',k,new TextEncoder().encode(payload)))].map(x=>String.fromCharCode(x)).join('');const token=payload+'.'+btoa(sig).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_');const r=await next(new Request(new URL('/api/send-order-email',e.PUBLIC_BASE_URL||'http://internal'),{method:'POST',headers:{'Content-Type':'application/json','X-GrabZone-Token':token},body:JSON.stringify({orderNumber,type:'order_status_updated',status})}));return r.ok}catch{return false}}
 async function notifyVendor(e,vendorOrderId){
  try{
-  const v=await one(e,"SELECT vo.*,v.brand_name,v.business_name,v.order_notification_email,v.email vendor_email,o.order_number,o.customer_name,o.email customer_email,o.phone,o.address,o.district,o.division,o.upazila,o.payment_method FROM vendor_orders vo JOIN vendors v ON v.id=vo.vendor_id JOIN orders o ON o.id=vo.order_id WHERE vo.id=? LIMIT 1",[vendorOrderId]);
+  /*
+    One notification per vendor order, sent through the shared notifier so the
+    checkout path, the admin confirmation path and this finalizer cannot email the
+    same vendor twice. Delivery status is recorded in vendor_order_notifications.
+  */
+  const v=await one(e,"SELECT vo.*,v.brand_name,v.business_name,v.order_notification_email,v.email vendor_email,o.order_number,o.customer_name,o.created_at order_created_at,o.status order_status FROM vendor_orders vo JOIN vendors v ON v.id=vo.vendor_id JOIN orders o ON o.id=vo.order_id WHERE vo.id=? LIMIT 1",[vendorOrderId]);
   if(!v)return false;
-  const to=String(v.order_notification_email||v.vendor_email||"").trim();
-  if(!to||!to.includes("@"))return false;
-  const items=(await q(e,"SELECT voi.*,oi.product_name FROM vendor_order_items voi JOIN order_items oi ON oi.id=voi.order_item_id WHERE voi.vendor_order_id=? ORDER BY voi.rowid",[vendorOrderId])).results||[];
-  const lines=items.map(i=>{let o="";try{o=Object.entries(i.variation_options?JSON.parse(i.variation_options):{}).map(([k,x])=>k+": "+x).join(" · ")}catch{}return (i.product_name||"Product")+" × "+Number(i.quantity||1)+" — ৳"+Number(i.line_total||0).toLocaleString("en-BD")+(o?" ("+o+")":"")}).join("\n");
-  const plain="GrabZone Vendor Order\nOrder: "+v.order_number+"\nCustomer: "+v.customer_name+"\nPhone: "+v.phone+"\nEmail: "+v.customer_email+"\nAddress: "+v.address+", "+v.upazila+", "+v.district+", "+v.division+"\nPayment: "+(v.payment_method||"Cash on Delivery")+"\nProducts:\n"+lines+"\nVendor subtotal: ৳"+Number(v.subtotal||0).toLocaleString("en-BD")+"\nDelivery charge: ৳"+Number(v.delivery_charge||0).toLocaleString("en-BD")+"\nStatus: "+v.status;
-  const subject="GrabZone Vendor Order — "+v.order_number,boundary="gzv_"+crypto.randomUUID().replace(/-/g,"");
-  const raw=["From: GrabZone <"+String(e.GMAIL_FROM_EMAIL||"grabzonesupport@gmail.com")+">","To: "+to,"Subject: "+subject,"MIME-Version: 1.0","Content-Type: text/plain; charset=\"UTF-8\"","",""+plain].join("\r\n");
-  const tokenReq=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:String(e.GOOGLE_CLIENT_ID||""),client_secret:String(e.GOOGLE_CLIENT_SECRET||""),refresh_token:String(e.GOOGLE_REFRESH_TOKEN||""),grant_type:"refresh_token"})});
-  const td=await tokenReq.json().catch(()=>({}));if(!tokenReq.ok||!td.access_token)return false;
-  const resp=await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",{method:"POST",headers:{Authorization:"Bearer "+td.access_token,"Content-Type":"application/json"},body:JSON.stringify({raw:btoa(unescape(encodeURIComponent(raw))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"")})});
-  if(!resp.ok)return false;
-  await e.DB.prepare("UPDATE vendor_orders SET vendor_notified_at=?,updated_at=? WHERE id=?").bind(now(),now(),vendorOrderId).run().catch(()=>{});
-  return true;
+  const items=(await q(e,"SELECT voi.*,oi.product_name,oi.image_url FROM vendor_order_items voi JOIN order_items oi ON oi.id=voi.order_item_id WHERE voi.vendor_order_id=? ORDER BY voi.rowid",[vendorOrderId])).results||[];
+  const subtotal=Number(v.subtotal||0);
+  const shipping=Math.max(0,Number(v.delivery_charge||v.shipping_fee||0));
+  const result=await notifyVendorOrder(e,{
+   orderId:v.order_id,
+   orderNumber:v.order_number,
+   placedAt:v.order_created_at||v.created_at,
+   orderStatus:v.order_status||v.status,
+   vendorId:v.vendor_id,
+   vendorName:v.brand_name||v.business_name||"GrabZone Vendor",
+   recipient:String(v.order_notification_email||v.vendor_email||"").trim(),
+   vendorOrderId:v.id,
+   items,subtotal,shipping,total:subtotal+shipping,
+   customerName:v.customer_name,
+  });
+  if(result?.sent){
+   await e.DB.prepare("UPDATE vendor_orders SET vendor_notified_at=?,updated_at=? WHERE id=?").bind(now(),now(),vendorOrderId).run().catch(()=>{});
+   return true;
+  }
+  return false;
  }catch(err){console.warn("Vendor order notification:",err);return false}
 }
 
